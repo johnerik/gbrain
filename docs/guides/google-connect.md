@@ -181,12 +181,36 @@ rate-limited or failing thread fails the WHOLE batch (the floor only
 advances after a fully-successful one), so raising this trades resume
 granularity for round-trip count. Gmail returns HTTP 403 with a rate-limit
 reason under bursty request volume; the client already retries those with
-exponential backoff (honoring `Retry-After` when Google sends one) before
-giving up, so an occasional 403 during a large backfill is expected and
-self-heals — a batch size so large that failures become routine is the
-signal to dial it back down, not the client misbehaving. The upper bound
-(500) matches the client's own per-listing-call pagination safety cap; a
-batch larger than that buys nothing.
+patient backoff (see "Rate limits during backfill" below) before giving up,
+so an occasional 403 during a large backfill is expected and self-heals — a
+batch size so large that failures become routine is the signal to dial it
+back down, not the client misbehaving. The upper bound (500) matches the
+client's own per-listing-call pagination safety cap; a batch larger than
+that buys nothing.
+
+## Rate limits during backfill
+
+A large mailbox backfilling a wide `--history-days` window can trip Gmail's
+per-user rate limit in bursts — Google answers with HTTP 403
+(`rateLimitExceeded` / `userRateLimitExceeded`) or 429, and it clears on its
+own within seconds to low minutes. The client retries a rate-limited request
+patiently — 6 attempts by default, exponential backoff with jitter capped at
+60s, honoring `Retry-After` when Google sends one — before finally giving up
+and reporting `rate_limited`. That budget is deliberately much larger than
+the 2-attempt budget used for other retryable failures (like a 401 needing a
+token refresh): giving up too early used to mean a thread that would have
+succeeded a few seconds later was instead skipped for the rest of the sync.
+
+Tune it with `GBRAIN_GOOGLE_RATE_LIMIT_RETRIES` (a positive integer) if the
+default isn't enough for a very large, very rate-limited backfill. And even
+when a thread's retry budget IS exhausted, a rate-limit failure is never
+counted toward the poison-skip threshold — unlike a genuine per-thread
+failure (a malformed message, a permissions edge case), a rate limit says
+nothing about that specific thread, so the sweep keeps retrying it on every
+future run instead of silently giving up on it. A bigger `--backfill-batch`
+(above) raises how many threads one rate-limited/failed thread can drag down
+with it, since the floor only advances after a fully-successful batch — the
+two knobs trade off together on a very large, very throttled backfill.
 
 ## Other ways to reach Google (no gbrain OAuth)
 
