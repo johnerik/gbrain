@@ -145,3 +145,63 @@ describe('enrich citation gate (fail-closed)', () => {
     expect(calls).toBe(2); // NOT suppressed like a banked SKIP verdict would be
   }, 30000);
 });
+
+// ---------------------------------------------------------------------------
+// jane-local integration: the citation gate composes with --evidence-scope.
+// Neither PR's own suite covers this — PR C's makeCitationResolver only ever
+// saw `ownSourceId`; PR D never touched citation validation. The merge wires
+// EnrichOneCtx.evidenceSourceIds through to makeCitationResolver so a
+// bare-slug citation naming a page that lives ONLY in a federated source
+// resolves under `--evidence-scope federated` instead of being quarantined
+// as "unresolvable" just because the gate stayed narrowed to `own`.
+// ---------------------------------------------------------------------------
+describe('citation gate composes with --evidence-scope (merge integration)', () => {
+  test('a citation naming a federated-source page resolves under evidenceScope federated, not own', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config) VALUES ('mail', 'mail', '{"federated": true}')
+         ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config`,
+    );
+    await seedStub('people/alice-example', 'Alice Example');
+    // The cited page lives ONLY in the federated 'mail' source, not 'default'.
+    await engine.putPage('mail/thread-1', {
+      type: 'note' as never, title: 'thread-1', compiled_truth: 'Notes about Alice.', timeline: '', frontmatter: {},
+    }, { sourceId: 'mail' });
+    await engine.addLink('mail/thread-1', 'people/alice-example', RICH_CONTEXT, undefined, undefined, undefined, undefined, { fromSourceId: 'mail', toSourceId: 'default' });
+
+    const synth: SynthesizeFn = async () =>
+      '## Overview\nAlice Example founded WidgetCo and leads design. [Source: mail/thread-1]';
+
+    // Under 'own' (default): mail/thread-1 is invisible to getPage({sourceId:'default'}) → quarantined.
+    const rOwn = await runEnrichCore(engine, {
+      sourceId: 'default', types: ['person'], model: 'test:model', minContextChars: 50, synthesizeFn: synth,
+    });
+    expect(rOwn.pages_enriched).toBe(1);
+    expect(rOwn.sentences_quarantined).toBe(1);
+    const pageOwn = await engine.getPage('people/alice-example', { sourceId: 'default' });
+    expect(pageOwn!.compiled_truth).toContain(UNVERIFIED_HEADING);
+
+    await resetPgliteState(engine);
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config) VALUES ('mail', 'mail', '{"federated": true}')
+         ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config`,
+    );
+    await seedStub('people/alice-example', 'Alice Example');
+    await engine.putPage('mail/thread-1', {
+      type: 'note' as never, title: 'thread-1', compiled_truth: 'Notes about Alice.', timeline: '', frontmatter: {},
+    }, { sourceId: 'mail' });
+    await engine.addLink('mail/thread-1', 'people/alice-example', RICH_CONTEXT, undefined, undefined, undefined, undefined, { fromSourceId: 'mail', toSourceId: 'default' });
+
+    // Under 'federated': the citation gate's resolver now searches the same
+    // widened scope retrieveEvidence used → resolves cleanly, no quarantine.
+    const rFederated = await runEnrichCore(engine, {
+      sourceId: 'default', types: ['person'], model: 'test:model', minContextChars: 50,
+      evidenceScope: 'federated', synthesizeFn: synth,
+    });
+    expect(rFederated.pages_enriched).toBe(1);
+    expect(rFederated.sentences_quarantined ?? 0).toBe(0);
+    expect(rFederated.citations_ok).toBe(1);
+    const pageFederated = await engine.getPage('people/alice-example', { sourceId: 'default' });
+    expect(pageFederated!.compiled_truth).toContain('[Source: mail/thread-1]');
+    expect(pageFederated!.compiled_truth).not.toContain(UNVERIFIED_HEADING);
+  }, 30000);
+});
