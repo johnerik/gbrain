@@ -411,8 +411,11 @@ function isSessionScaffold(entry: unknown): boolean {
 function carriesConversationMessage(entry: unknown): boolean {
   if (typeof entry !== 'object' || entry === null) return false;
   const e = entry as Record<string, unknown>;
-  if (typeof e.message !== 'object' || e.message === null) return false;
-  return !(e.type === 'user' && e.isMeta === true);
+  if (e.type === 'user' && e.isMeta === true) return false;
+  // A turn-shaped record whose payload is null/missing/moved is how a host
+  // format change shows, so it counts even though nothing can be decoded.
+  if (e.type === 'user' || e.type === 'assistant') return true;
+  return typeof e.message === 'object' && e.message !== null;
 }
 
 /** {type:'system', subtype:'compact_boundary'} — Claude Code's on-disk compaction marker (v0.45.7). */

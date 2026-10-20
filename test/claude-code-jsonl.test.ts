@@ -120,6 +120,20 @@ describe('parseTranscript on the fixture [G3, A6]', () => {
     expect(r.recognizedOnly).toBeUndefined();
   });
 
+  test('turn-shaped records with an undecodable payload keep the drift path open', () => {
+    const dir = tdir();
+    const p = join(dir, 'null-payload.jsonl');
+    const rows = [
+      { sessionId: 's', type: 'last-prompt', prompt: 'hi' },
+      { sessionId: 's', type: 'user', message: null },
+      { sessionId: 's', type: 'assistant' },
+    ];
+    writeFileSync(p, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const r = parseTranscript(p);
+    expect(r.turns).toHaveLength(0);
+    expect(r.recognizedOnly).toBeUndefined();
+  });
+
   test('only unknown records (no scaffolding) keeps the drift path open', () => {
     const dir = tdir();
     const p = join(dir, 'unknown.jsonl');
